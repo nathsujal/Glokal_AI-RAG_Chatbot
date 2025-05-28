@@ -1,0 +1,7 @@
+__pycache__/
+session_memroy/
+uploaded_docs/
+.venv/
+.pytest_cache/
+
+.env
