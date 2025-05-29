@@ -32,7 +32,7 @@ function App() {
 
   // Update input disabled state when uploadedFiles changes
   useEffect(() => {
-    setIsInputDisabled(uploadedFiles.length == 0);
+    setIsInputDisabled(uploadedFiles.length === 0);
   }, [uploadedFiles]);
 
   // Scroll to bottom whenever messages change
@@ -648,7 +648,7 @@ function App() {
                           <span className="file-icon">
                             {file.status === 'ocr_processed' ? '🔍' : '📄'}
                           </span>
-                          <span className="file-name">{file.name}</span>
+                          <span className="file-name">{file}</span>
                           <span className="file-status">
                             {file.status === 'ocr_processed' ? '(OCR Processed)' : ''}
                           </span>
@@ -670,7 +670,7 @@ function App() {
                   </div>
                 </div>
 
-                {/* Upload New Files Section */}
+                {/* `Upload New` Files Section */}
                 <div className="upload-new-section">
                   <h4>Upload New Files</h4>
                   <form onSubmit={handleUploadFiles} className="upload-form">
