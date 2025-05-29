@@ -19,6 +19,10 @@ from pathlib import Path
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+from bs4 import BeautifulSoup
+import requests
+from urllib.parse import urlparse
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +70,10 @@ class SaveAlternativesRequest(BaseModel):
     message_id: str
     alternatives: List[str]
 
+class WebLinksInput(BaseModel):
+    session_id: str
+    urls: List[str]
+
 def generate_chat_title(first_message: str) -> str:
     """Generate a meaningful chat title from the first user message."""
     try:
@@ -100,6 +108,18 @@ async def chat(request: ChatInput):
     try:
         session_id = request.session_id
         user_input = request.message
+
+        # Document check
+        doc_dir = os.path.join(UPLOAD_DIR, session_id)
+        if not os.path.exists(doc_dir) or not any(os.scandir(doc_dir)):
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "error": "Please upload at least one document or add web links before chatting",
+                    "response": None,
+                    "session_id": session_id
+                }
+            )
 
         # Validate inputs
         if not session_id or not session_id.strip():
@@ -399,6 +419,100 @@ async def generate_session():
         logger.error(f"Error generating session: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate session")
 
+@app.post("/add_web_links")
+async def add_web_links(request: WebLinksInput):
+    try:
+        session_id = request.session_id
+        urls = request.urls
+        
+        if not session_id or not session_id.strip():
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+        
+        if not urls:
+            raise HTTPException(status_code=400, detail="No URLs provided")
+
+        # Create directory for this session
+        upload_dir = Path(UPLOAD_DIR) / session_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        scraped_urls = []
+        failed_urls = []
+        metadata_path = os.path.join(MEMORY_DIR, f"{session_id}_files.json")
+        file_metadata = {}
+
+        # Load existing metadata if available
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r") as f:
+                    file_metadata = json.load(f)
+            except:
+                pass
+
+        for url in urls:
+            try:
+                # Validate URL format
+                if not re.match(r'^https?://', url):
+                    url = 'https://' + url
+                
+                # Scrape content
+                response = requests.get(url, timeout=10)
+                response.raise_for_status()
+                
+                # Parse HTML
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Extract meaningful content
+                for script in soup(["script", "style"]):
+                    script.extract()
+                
+                text = soup.get_text()
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+                
+                # Generate filename
+                domain = urlparse(url).netloc
+                filename = f"{domain}_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+                file_path = upload_dir / filename
+                
+                # Save metadata
+                file_metadata[filename] = {
+                    "original_url": url,
+                    "type": "webpage",
+                    "scraped_at": datetime.now().isoformat()
+                }
+
+                # Save content
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"URL: {url}\n\n")
+                    f.write(clean_text)
+                
+                scraped_urls.append({
+                    "url": url,
+                    "filename": filename,
+                    "size": len(clean_text)
+                })
+                
+            except Exception as e:
+                logger.error(f"Error scraping {url}: {e}")
+                failed_urls.append(url)
+
+        # Save metadata
+        with open(metadata_path, "w") as f:
+            json.dump(file_metadata, f, indent=2)
+        
+        result = {"success": len(scraped_urls) > 0}
+        if scraped_urls:
+            result["scraped_urls"] = scraped_urls
+        if failed_urls:
+            result["failed_urls"] = failed_urls
+            
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in web link endpoint: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process web links")
+    
 @app.post("/upload")
 async def upload_files(
     session_id: str = Form(...),
@@ -659,7 +773,7 @@ async def delete_file(request: DeleteFileRequest):
 
 @app.get("/uploaded_files")
 async def get_uploaded_files(session_id: str):
-    """List uploaded files for a given session with additional metadata."""
+    """List uploaded files and web links for a given session with metadata."""
     try:
         if not session_id or not session_id.strip():
             raise HTTPException(status_code=400, detail="Invalid session ID")
@@ -668,31 +782,63 @@ async def get_uploaded_files(session_id: str):
         if not os.path.exists(doc_dir):
             return {"files": []}
         
+        # Load file metadata
+        metadata_path = os.path.join(MEMORY_DIR, f"{session_id}_files.json")
+        file_metadata = {}
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r") as f:
+                    file_metadata = json.load(f)
+            except Exception as e:
+                logger.error(f"Error loading file metadata: {e}")
+
         files = []
+        
+        # First pass: collect all non-OCR files and note OCR status
         for entry in os.scandir(doc_dir):
             if entry.is_file():
+                # Skip OCR-generated files (*.ocr.txt)
+                if entry.name.endswith('.ocr.txt'):
+                    continue
+                    
                 try:
                     file_stat = entry.stat()
-                    files.append({
-                        "name": entry.name,
+                    base_name = entry.name
+                    
+                    # Check if this file has metadata (web scraped content)
+                    file_info = file_metadata.get(base_name, {})
+                    
+                    # Create file entry
+                    file_entry = {
+                        "name": base_name,
+                        "display_name": file_info.get("original_url", base_name),
+                        "original_url": file_info.get("original_url", None),
+                        "type": file_info.get("type", "file"),
                         "size": file_stat.st_size,
-                        "human_size": human_readable_size(file_stat.st_size),  # New
+                        "human_size": human_readable_size(file_stat.st_size),
                         "modified": file_stat.st_mtime,
-                        "modified_iso": datetime.fromtimestamp(  # New
-                            file_stat.st_mtime
-                        ).isoformat(),
-                        "extension": os.path.splitext(entry.name)[1].lower(),  # New
-                        "is_image": is_image_file(entry.name)  # New
-                    })
+                        "modified_iso": datetime.fromtimestamp(file_stat.st_mtime).isoformat(),
+                        "extension": os.path.splitext(base_name)[1].lower(),
+                        "is_image": is_image_file(base_name),
+                        "ocr_processed": False  # Will check below
+                    }
+                    
+                    # Check if OCR file exists for this file
+                    if file_entry["is_image"] or base_name.lower().endswith('.pdf'):
+                        ocr_file = os.path.join(doc_dir, f"{base_name}.ocr.txt")
+                        file_entry["ocr_processed"] = os.path.exists(ocr_file)
+                    
+                    files.append(file_entry)
                 except Exception as e:
                     logger.warning(f"Error processing {entry.name}: {e}")
                     files.append({
                         "name": entry.name,
+                        "display_name": entry.name,
                         "error": str(e)
                     })
-        
-        # Sort by modification time (newest first) and name
-        files.sort(key=lambda x: (-x["modified"], x["name"].lower()))
+
+        # Sort files by modification time (newest first)
+        files.sort(key=lambda x: x.get("modified", 0), reverse=True)
         
         return {"files": files}
     except HTTPException:

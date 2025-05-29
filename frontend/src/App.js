@@ -1,6 +1,8 @@
 // src/App.js
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import ImageIcon from '@mui/icons-material/Image';
+import DescriptionIcon from '@mui/icons-material/Description';
 import './App.css';
 
 function App() {
@@ -21,6 +23,8 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isInputDisabled, setIsInputDisabled] = useState(true);
   const [tooltipVisible, setToolTipVisible] = useState(false);
+  const [webLinks, setWebLinks] = useState(['']);
+  const [isAddingLinks, setIsAddingLinks] = useState(false);
   const chatEndRef = useRef(null);
   const API_URL = 'http://localhost:8000'; // Update this to your API URL
 
@@ -333,14 +337,104 @@ function App() {
     }
   };
 
-  const formatDate = (dateString) => {
+  const handleAddLinks = async () => {
     try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-    } catch {
-      return '';
+      const validLinks = webLinks
+        .map(link => link.trim())
+        .filter(link => link && isValidUrl(link));
+      
+      if (validLinks.length === 0) {
+        alert('Please enter valid URLs starting with http:// or https://');
+        return;
+      }
+  
+      const response = await fetch(`${API_URL}/add_web_links`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          urls: validLinks
+        })
+      });
+  
+      const data = await response.json();
+      
+      if (data.success) {
+        // Refresh files list
+        fetchUploadedFiles(sessionId);
+        setMessages([...messages, { 
+          text: `Successfully added ${data.scraped_urls?.length || 0} web page(s)`, 
+          sender: 'system' 
+        }]);
+        setIsAddingLinks(false);
+        setWebLinks(['']);
+      } else {
+        const failed = data.failed_urls ? data.failed_urls.join(', ') : 'some URLs';
+        setMessages([...messages, { 
+          text: `Failed to process ${failed}`, 
+          sender: 'system', 
+          isError: true 
+        }]);
+      }
+    } catch (error) {
+      console.error('Error adding web links:', error);
+      setMessages([...messages, { 
+        text: 'Failed to add web links. Please try again.', 
+        sender: 'system', 
+        isError: true 
+      }]);
     }
   };
+  
+  // URL validation helper
+  const isValidUrl = (url) => {
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Add humanFileSize function
+  const humanFileSize = (bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Add formatDate function (simplified)
+  const formatDate = (timestamp) => {
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleDateString([], { 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  // Icon components
+  const FileIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+      <path d="M13 2H6C5.46957 2 4.96086 2.21071 4.58579 2.58579C4.21071 2.96086 4 3.46957 4 4V20C4 20.5304 4.21071 21.0391 4.58579 21.4142C4.96086 21.7893 5.46957 22 6 22H18C18.5304 22 19.0391 21.7893 19.4142 21.4142C19.7893 21.0391 20 20.5304 20 20V9L13 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M13 2V9H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+
+  const GlobeIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+      <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M2 12H22" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M12 2C14.5013 4.73835 15.9228 8.29203 16 12C15.9228 15.708 14.5013 19.2616 12 22C9.49872 19.2616 8.07725 15.708 8 12C8.07725 8.29203 9.49872 4.73835 12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+
+  const PublishIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#e3e3e3"><path d="M440-160v-326L336-382l-56-58 200-200 200 200-56 58-104-104v326h-80ZM160-600v-120q0-33 23.5-56.5T240-800h480q33 0 56.5 23.5T800-720v120h-80v-120H240v120h-80Z"/></svg>  
+  );
 
   // Regenerate response
   const handleRegenerate = async (messageIndex) => {
@@ -629,29 +723,75 @@ function App() {
             <div className="uploader-overlay">
               <div className="uploader-container">
                 <div className="uploader-header">
-                  <h3>Upload Files</h3>
+                  <h3>Add Content to Session</h3>
                   <button 
                     className="close-btn"
-                    onClick={() => setIsUploaderOpen(false)}
+                    onClick={() => {
+                      setIsUploaderOpen(false);
+                      setIsAddingLinks(false);
+                      setWebLinks(['']);
+                    }}
                   >
                     ×
                   </button>
                 </div>
                 
-                {/* Uploaded Files Section */}
+                {/* Content Tabs */}
+                <div className="content-tabs">
+                  <button 
+                    className={`tab-btn ${!isAddingLinks ? 'active' : ''}`}
+                    onClick={() => setIsAddingLinks(false)}
+                  >
+                    <FileIcon /> Files
+                  </button>
+                  <button 
+                    className={`tab-btn ${isAddingLinks ? 'active' : ''}`}
+                    onClick={() => setIsAddingLinks(true)}
+                  >
+                    <GlobeIcon /> Web Links
+                  </button>
+                </div>
+                
+                {/* Uploaded Files Section - Always visible */}
                 <div className="uploaded-files-section">
-                  <h4>Uploaded Files ({uploadedFiles.length})</h4>
+                  <h4>Current Content ({uploadedFiles.length})</h4>
                   <div className="uploaded-files-list">
                     {uploadedFiles.length > 0 ? (
                       uploadedFiles.map((file, index) => (
                         <div key={index} className="uploaded-file-item">
                           <span className="file-icon">
-                            {file.status === 'ocr_processed' ? '🔍' : '📄'}
+                            {file.type === "webpage" ? (
+                              <GlobeIcon />
+                            ) : file.is_image ? (
+                              <ImageIcon />
+                            ) : (
+                              <DescriptionIcon />
+                            )}
                           </span>
-                          <span className="file-name">{file}</span>
-                          <span className="file-status">
-                            {file.status === 'ocr_processed' ? '(OCR Processed)' : ''}
-                          </span>
+
+                          {file.original_url ? (
+                            <div className="file-info">
+                              <a 
+                                href={file.original_url} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="file-url"
+                              >
+                                {file.original_url}
+                              </a>
+                              <div className="file-meta">
+                                {humanFileSize(file.size)} • {formatDate(file.modified)}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="file-info">
+                              <span className="file-name">{file.name}</span>
+                              <div className="file-meta">
+                                {humanFileSize(file.size)} • {formatDate(file.modified)}
+                              </div>
+                            </div>
+                          )}
+
                           <button 
                             className="delete-file-btn"
                             onClick={() => handleDeleteFile(file.name)}
@@ -664,56 +804,166 @@ function App() {
                     ) : (
                       <div className="no-files-message">
                         <span className="empty-icon">📂</span>
-                        No files uploaded yet
+                        No content added yet
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* `Upload New` Files Section */}
-                <div className="upload-new-section">
-                  <h4>Upload New Files</h4>
-                  <form onSubmit={handleUploadFiles} className="upload-form">
-                    <label className="file-drop-area">
-                      <input 
-                        type="file" 
-                        multiple 
-                        onChange={handleFileSelect} 
-                        className="file-input"
-                      />
-                      <div className="drop-instructions">
-                        <div className="upload-icon">📤</div>
-                        <p>Click to browse or drag files here</p>
-                        <p className="file-types">Supports PDF, TXT, DOCX</p>
+                {/* Dynamic Content Section */}
+                <div className="content-section">
+                  {isAddingLinks ? (
+                    <div className="web-links-section">
+                      <h5>Add Web Pages</h5>
+                      <p className="section-description">
+                        Enter URLs to extract content from websites
+                      </p>
+                      
+                      <div className="link-inputs-container">
+                        {webLinks.map((link, index) => (
+                          <div key={index} className="link-input-group">
+                            <div className="link-counter">{index + 1}</div>
+                            <input
+                              type="text"
+                              value={link}
+                              onChange={(e) => {
+                                const newLinks = [...webLinks];
+                                newLinks[index] = e.target.value;
+                                setWebLinks(newLinks);
+                              }}
+                              placeholder="https://example.com"
+                              className="link-input"
+                            />
+                            <div className="link-actions">
+                              {index === webLinks.length - 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setWebLinks([...webLinks, ''])}
+                                  className="icon-btn add-btn"
+                                  title="Add another URL"
+                                >
+                                  +
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (webLinks.length > 1) {
+                                    const newLinks = [...webLinks];
+                                    newLinks.splice(index, 1);
+                                    setWebLinks(newLinks);
+                                  } else {
+                                    setWebLinks(['']);
+                                  }
+                                }}
+                                className="icon-btn remove-btn"
+                                title="Remove URL"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    </label>
-                    <div className="selected-files">
-                      {Array.from(selectedFiles).map((file, index) => (
-                        <div key={index} className="selected-file">
-                          <span className="file-icon">📄</span>
-                          <span>{file.name}</span>
+
+                      <div className="link-tips" >
+                        <span className="tip-icon">💡</span>
+                        <span>Tip: Use direct URLs to articles or documentation for best results</span>
+                      </div>
+                      
+                      <div className="section-actions">
+                        <button
+                          type="button"
+                          className="action-btn secondary"
+                          onClick={() => setIsAddingLinks(false)}
+                        >
+                          Back to Files
+                        </button>
+                        <button
+                          type="button"
+                          className="action-btn primary"
+                          onClick={handleAddLinks}
+                          disabled={webLinks.every(link => !link.trim())}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="file-upload-section">
+                      <h5>Upload Files</h5>
+                      <p className="section-description">Add documents to chat with</p>
+                      
+                      <form onSubmit={handleUploadFiles} className="upload-form">
+                        <label className="file-drop-area">
+                          <input 
+                            type="file" 
+                            multiple 
+                            onChange={handleFileSelect} 
+                            className="file-input"
+                          />
+                          <div className="drop-instructions">
+                            <div className="upload-icon">📤</div>
+                            <p>Click to browse or drag files here</p>
+                            <p className="file-types">Supports PDF, TXT, DOCX, Images</p>
+                          </div>
+                        </label>
+                        
+                        {selectedFiles.length > 0 && (
+                          <div className="selected-files-container">
+                            <div className="selected-files-header">
+                              <span>Selected Files ({selectedFiles.length})</span>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedFiles([])}
+                                className="clear-all-btn"
+                              >
+                                Clear All
+                              </button>
+                            </div>
+                            <div className="selected-files">
+                              {Array.from(selectedFiles).map((file, index) => (
+                                <div key={index} className="selected-file">
+                                  <span className="file-icon">📄</span>
+                                  <span className="file-name">{file.name}</span>
+                                  <span className="file-size">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const newFiles = Array.from(selectedFiles).filter((_, i) => i !== index);
+                                      setSelectedFiles(newFiles);
+                                    }}
+                                    className="remove-selected-btn"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div className="section-actions">
                           <button
                             type="button"
-                            onClick={() => {
-                              const newFiles = Array.from(selectedFiles).filter((_, i) => i !== index);
-                              setSelectedFiles(newFiles);
-                            }}
-                            className="remove-selected-btn"
+                            className="action-btn secondary"
+                            onClick={() => setIsUploaderOpen(false)}
                           >
-                            ×
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="action-btn primary"
+                            disabled={selectedFiles.length === 0 || isUploading}
+                          >
+                            {isUploading ? 'Uploading...' : `Upload Files (${selectedFiles.length})`}
                           </button>
                         </div>
-                      ))}
+                      </form>
                     </div>
-                    <div className="uploader-actions">
-                      <button type="button" className="cancel-btn" onClick={() => setIsUploaderOpen(false)}>
-                        Cancel
-                      </button>
-                      <button type="submit" className="upload-action-btn" disabled={selectedFiles.length === 0 || isUploading}>
-                        {isUploading ? 'Uploading...' : `Upload (${selectedFiles.length})`}
-                      </button>
-                    </div>
-                  </form>
+                  )}
                 </div>
               </div>
             </div>
