@@ -666,7 +666,7 @@ async def get_uploaded_files(session_id: str):
 
         doc_dir = os.path.join(UPLOAD_DIR, session_id)
         if not os.path.exists(doc_dir):
-            return {"files": [], "files_detailed": []}
+            return {"files": []}
         
         files = []
         for entry in os.scandir(doc_dir):
@@ -676,31 +676,44 @@ async def get_uploaded_files(session_id: str):
                     files.append({
                         "name": entry.name,
                         "size": file_stat.st_size,
-                        "modified": file_stat.st_mtime
+                        "human_size": human_readable_size(file_stat.st_size),  # New
+                        "modified": file_stat.st_mtime,
+                        "modified_iso": datetime.fromtimestamp(  # New
+                            file_stat.st_mtime
+                        ).isoformat(),
+                        "extension": os.path.splitext(entry.name)[1].lower(),  # New
+                        "is_image": is_image_file(entry.name)  # New
                     })
                 except Exception as e:
-                    logger.warning(f"Error getting file stats for {entry.name}: {e}")
+                    logger.warning(f"Error processing {entry.name}: {e}")
                     files.append({
                         "name": entry.name,
-                        "size": 0,
-                        "modified": 0
+                        "error": str(e)
                     })
         
-        # Sort files by name
-        files.sort(key=lambda x: x['name'].lower())
+        # Sort by modification time (newest first) and name
+        files.sort(key=lambda x: (-x["modified"], x["name"].lower()))
         
-        # For backward compatibility, also return just the names
-        file_names = [f['name'] for f in files]
-        
-        return {
-            "files": file_names,  # Keep this for existing functionality
-            "files_detailed": files  # New detailed information
-        }
+        return {"files": files}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error listing uploaded files: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list uploaded files")
+        logger.error(f"Error listing files: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list files")
+
+# Helper functions (add outside endpoint)
+def human_readable_size(size_bytes):
+    """Convert bytes to human-readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+def is_image_file(filename):
+    """Check if file is an image"""
+    image_exts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']
+    return os.path.splitext(filename)[1].lower() in image_exts
 
 @app.get("/health")
 async def health_check():
